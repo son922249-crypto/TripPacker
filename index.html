@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TripPacker | 실시간 기여도 확인</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+</head>
+<body class="bg-slate-50 min-h-screen font-sans text-slate-800 pb-20">
+
+    <div class="max-w-md mx-auto px-4 py-8">
+        <div class="bg-indigo-600 rounded-3xl p-5 mb-6 shadow-lg text-white flex justify-between items-center">
+            <div class="flex items-center gap-2">
+                <i class="fas fa-user-circle text-xl opacity-70"></i>
+                <input type="text" id="myNickname" placeholder="내 이름 입력" 
+                    class="bg-transparent border-none focus:ring-0 outline-none font-bold w-24 placeholder:text-indigo-300">
+            </div>
+            <div id="live-indicator" class="text-[10px] bg-white/20 px-3 py-1 rounded-full font-black">
+                <span class="animate-pulse inline-block w-2 h-2 bg-emerald-400 rounded-full mr-1"></span>
+                실시간 동기화 중
+            </div>
+        </div>
+
+        <div class="bg-white rounded-3xl p-6 mb-6 shadow-sm border border-slate-100">
+            <input type="text" id="tripName" placeholder="여행 제목" id="tripNameInput"
+                class="w-full text-xl font-black border-none focus:ring-0 p-0 mb-1">
+            <div class="flex justify-between items-center mt-2">
+                <input type="date" id="tripDate" class="text-xs text-slate-400 border-none focus:ring-0 p-0">
+                <button onclick="copyLink()" id="copyBtn" class="text-xs font-bold text-indigo-600 hover:text-indigo-800 transition-colors">
+                    <i class="fas fa-link mr-1"></i> <span id="copyBtnText">링크 복사</span>
+                </button>
+            </div>
+        </div>
+
+        <div class="mb-8">
+            <h3 class="text-[11px] font-black text-slate-400 uppercase tracking-widest mb-3 px-2">참여자별 준비 현황</h3>
+            <div id="member-stats" class="grid grid-cols-2 gap-3">
+                <div class="bg-slate-200 animate-pulse h-12 rounded-2xl"></div>
+                <div class="bg-slate-200 animate-pulse h-12 rounded-2xl"></div>
+            </div>
+        </div>
+
+        <div class="bg-white rounded-2xl shadow-md p-3 mb-6 flex gap-2 border border-indigo-50 sticky top-4 z-20">
+            <input type="text" id="itemInput" placeholder="무엇을 가져갈까요? (엔터 입력 가능)" 
+                class="flex-1 bg-transparent border-none focus:ring-0 px-3 py-2 outline-none font-medium">
+            <button onclick="addItem()" class="bg-indigo-600 text-white w-12 h-12 rounded-xl shadow-lg transition-transform active:scale-90 flex items-center justify-center">
+                <i class="fas fa-plus"></i>
+            </button>
+        </div>
+
+        <div id="shopping-list" class="space-y-3"></div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getFirestore, collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, updateDoc, doc, deleteDoc, setDoc } 
+        from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+        const firebaseConfig = { 
+  apiKey: "AIzaSyBG-3qE56PcO1iGIW6gtPYxEk6rjJ_ZbbU",
+  authDomain: "trippacker-aed38.firebaseapp.com",
+  projectId: "trippacker-aed38",
+  storageBucket: "trippacker-aed38.firebasestorage.app",
+  messagingSenderId: "832845473095",
+  appId: "1:832845473095:web:5b809d157417b77c9a5862",
+  measurementId: "G-XC7C18DRMC"
+        };
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const itemsCol = collection(db, "trip_items");
+        const metaDoc = doc(db, "trip_meta", "info");
+
+        // 1. 입력창 즉시 초기화 및 엔터키 지원
+        const itemInput = document.getElementById('itemInput');
+        
+        // 엔터키 감지 이벤트 추가
+        itemInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                addItem();
+            }
+        });
+
+        window.addItem = async () => {
+            const val = itemInput.value.trim();
+            if(!val) return;
+
+            try {
+                await addDoc(itemsCol, { 
+                    text: val, 
+                    checked: false, 
+                    checkedBy: '', 
+                    createdAt: serverTimestamp() 
+                });
+                
+                // [수정] 입력창 즉시 초기화 및 다시 포커스
+                itemInput.value = '';
+                itemInput.focus();
+            } catch (error) {
+                console.error("추가 실패:", error);
+                alert("항목 추가에 실패했습니다.");
+            }
+        };
+
+        // 2. 링크 공유하기 (호환성 개선 버전)
+        window.copyLink = () => {
+            const currentUrl = window.location.href;
+            const btnText = document.getElementById('copyBtnText');
+            
+            // Clipboard API 사용 시도
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(currentUrl).then(() => {
+                    handleCopySuccess();
+                }).catch(() => {
+                    fallbackCopy(currentUrl);
+                });
+            } else {
+                fallbackCopy(currentUrl);
+            }
+
+            function handleCopySuccess() {
+                btnText.innerText = "복사 완료!";
+                setTimeout(() => { btnText.innerText = "링크 복사"; }, 2000);
+            }
+
+            // 구형 브라우저나 일부 환경을 위한 보조 복사 방식
+            function fallbackCopy(text) {
+                const textArea = document.createElement("textarea");
+                textArea.value = text;
+                document.body.appendChild(textArea);
+                textArea.select();
+                try {
+                    document.execCommand('copy');
+                    handleCopySuccess();
+                } catch (err) {
+                    alert('복사에 실패했습니다. 주소창의 링크를 복사해주세요.');
+                }
+                document.body.removeChild(textArea);
+            }
+        };
+
+        // --- 기존 로직 (닉네임, 체크, 통계 등) 유지 및 보완 ---
+
+        const nameInput = document.getElementById('myNickname');
+        nameInput.value = localStorage.getItem('trip_nickname') || '';
+        nameInput.oninput = () => localStorage.setItem('trip_nickname', nameInput.value);
+
+        window.toggleCheck = async (id, currentStatus) => {
+            const myName = nameInput.value.trim();
+            if(!currentStatus && !myName) { 
+                alert("이름을 입력해야 체크할 수 있어요!"); 
+                nameInput.focus(); 
+                return; 
+            }
+            await updateDoc(doc(db, "trip_items", id), { 
+                checked: !currentStatus, 
+                checkedBy: !currentStatus ? myName : '' 
+            });
+        };
+
+        window.deleteItem = async (id) => { 
+            if(confirm("삭제할까요?")) await deleteDoc(doc(db, "trip_items", id)); 
+        };
+
+        // 실시간 업데이트
+        onSnapshot(query(itemsCol, orderBy("createdAt", "desc")), (snapshot) => {
+            const list = document.getElementById('shopping-list');
+            const statsContainer = document.getElementById('member-stats');
+            list.innerHTML = '';
+            const stats = {};
+
+            snapshot.forEach((docSnap) => {
+                const data = docSnap.data();
+                if (data.checked && data.checkedBy) {
+                    stats[data.checkedBy] = (stats[data.checkedBy] || 0) + 1;
+                }
+
+                list.innerHTML += `
+                    <div class="bg-white p-4 rounded-2xl flex items-center justify-between shadow-sm border ${data.checked ? 'opacity-50 bg-slate-50' : 'border-slate-100'}">
+                        <div class="flex items-center gap-4 flex-1 cursor-pointer" onclick="toggleCheck('${docSnap.id}', ${data.checked})">
+                            <div class="w-6 h-6 rounded-lg border-2 flex items-center justify-center ${data.checked ? 'bg-indigo-600 border-indigo-600' : 'border-slate-200'}">
+                                ${data.checked ? '<i class="fas fa-check text-[10px] text-white"></i>' : ''}
+                            </div>
+                            <div>
+                                <div class="font-bold text-slate-700 ${data.checked ? 'line-through text-slate-400' : ''}">${data.text}</div>
+                                ${data.checked ? `<div class="text-[10px] font-black text-indigo-500 mt-1 uppercase tracking-tight">${data.checkedBy}님이 챙김</div>` : ''}
+                            </div>
+                        </div>
+                        <button onclick="deleteItem('${docSnap.id}')" class="text-slate-300 hover:text-red-400 p-2"><i class="fas fa-trash-alt text-xs"></i></button>
+                    </div>`;
+            });
+
+            statsContainer.innerHTML = '';
+            const members = Object.entries(stats);
+            if (members.length === 0) {
+                statsContainer.innerHTML = '<div class="col-span-2 text-center py-4 text-xs text-slate-400 bg-white rounded-2xl border border-dashed tracking-tighter">아직 체크한 인원이 없습니다.</div>';
+            } else {
+                members.forEach(([name, count]) => {
+                    statsContainer.innerHTML += `
+                        <div class="bg-white p-3 rounded-2xl border border-indigo-50 shadow-sm flex justify-between items-center">
+                            <span class="text-xs font-bold text-slate-600 truncate mr-2">${name}</span>
+                            <span class="bg-indigo-100 text-indigo-600 px-2 py-1 rounded-lg text-[9px] font-black shrink-0">${count}개 완료</span>
+                        </div>`;
+                });
+            }
+        });
+    </script>
+</body>
+</html>
